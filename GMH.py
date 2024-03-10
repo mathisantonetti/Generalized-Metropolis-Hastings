@@ -4,6 +4,31 @@ def Gaussian_distrib(mu, sigma):
     d = mu.shape[0]
     return lambda x:np.exp(-(x-mu)@np.linalg.solve(sigma, x - mu))/np.sqrt(2*np.pi)**(d/2)
 
+def ESS(data):
+    n, m = data.shape
+
+    variogram = lambda t: ((data[t:,:] - data[:(n - t),:])**2).sum() / (m*(n - t))
+    # Computing within-chain variance with Numpy
+    data_mean = data.mean(axis=1, keepdims=True)
+    W = ((data - data_mean)**2).sum()/m
+    B = np.sum((data_mean - data_mean.mean(keepdims=True))**2)/(m-1)
+    s2 = B + (W/n)
+
+    negative_autocorr = False
+    t = 1
+    rho = np.ones(n)
+
+    # And another loop!
+    while not negative_autocorr and (t < n):
+        rho[t] = 1 - variogram(t) / (2 * s2)
+        if not t % 2:
+            negative_autocorr = sum(rho[t-1:t+1]) < 0
+        t += 1
+
+    return n/(1+2*np.sum(rho[1:t]))
+
+
+
 class GaussianKernel():
     def __init__(self, mu, sigma):
         self.sigma = sigma
@@ -58,21 +83,23 @@ def Truly_Generalized_Metropolis_Hastings(distrib, kernel, x0, T, N):
     # MCMC loop
     for t in range(T):
         # Step 1
-        xtilde[1:, :] = kernel.sample(xtilde[I], N)
+        new_xtilde = kernel.sample(xtilde[I], N)
+        xtilde[:I, :] = new_xtilde[:I, :]
+        xtilde[I+1:, :] = new_xtilde[I:, :]
         
         # Step 2
-        pIcond = np.ones(d)
-
-        piK_I = distrib(xtilde[I])*kernel(xtilde[I], np.concatenate(xtilde[:I], xtilde[I+1:], axis=0))
-        for j in range(d):
+        pIcond = np.zeros(N+1)
+        piK_I = distrib(xtilde[I])*kernel(xtilde[I], np.concatenate((xtilde[:I], xtilde[I+1:]), axis=0))
+        for j in range(N+1):
             if(j != I):
-                pIcond[j] = min(1, distrib(xtilde[j])*kernel(xtilde[j], np.concatenate(xtilde[:j], xtilde[j+1:], axis=0))/piK_I)/N
+                pIcond[j] = min(1, distrib(xtilde[j])*kernel(xtilde[j], np.concatenate((xtilde[:j], xtilde[j+1:]), axis=0))/piK_I)/N
                 pIcond[I] += pIcond[j]
+
         pIcond[I] = 1 - pIcond[I]
 
         # Step 3
         for m in range(N):
-            I = np.random.choice(0, N+1, p=pIcond)
-            x.append(xtilde[I])
+            I = np.random.choice(N+1, p=pIcond)
+            x.append(np.copy(xtilde[I]))
 
     return x
